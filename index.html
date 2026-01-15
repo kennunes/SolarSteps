@@ -16,6 +16,19 @@
     
     <style>
         body { font-family: 'Inter', sans-serif; }
+        /* Pulse animation for the speaking icon */
+        @keyframes pulse-ring {
+            0% { transform: scale(0.8); opacity: 0.5; }
+            100% { transform: scale(2); opacity: 0; }
+        }
+        .speaking-ring::before {
+            content: '';
+            position: absolute;
+            left: 0; top: 0; width: 100%; height: 100%;
+            border-radius: 50%;
+            border: 2px solid currentColor;
+            animation: pulse-ring 2s infinite;
+        }
     </style>
 </head>
 <body>
@@ -24,13 +37,30 @@
     <script type="text/babel">
         const { useRef, useEffect, useState, useMemo } = React;
 
+        // --- NARRATION SCRIPT (Updated to match PDF Amendments) ---
+        const TOUR_SCRIPT = `
+            Welcome to the Solar Strategy Simulator. 
+            
+            This project began with a startling observation: How is it possible that our consumption has dropped to 40 percent of historical levels, yet our costs have practically doubled?
+            
+            We discovered that while we were saving units, the effective cost including miscellaneous charges and VAT had increased significantly. We were saving units, but the money just kept going up.
+            
+            We are effectively on a "9.8 percent Treadmill." The school is running on a treadmill that speeds up by nearly 10 percent every year.
+            
+            We also proved that stopping at Phase 1 wasn't a savings plan—it was just a temporary band-aid to a more serious budget crisis.
+            
+            This simulator allows the Principal, Bursar, and SGB to demonstrate a better way: A Phased Strategy. 
+            
+            Look for the "Staircase Effect" in the blue line. By adding capacity in stages, we drop the cost curve vertically, buying decades of stability. 
+            
+            The goal of this tool is to empower the SGB to move from a position of confusion to a position of mathematical certainty.
+        `;
+
         // --- MATH HELPER (Pure Function) ---
         const calculateProjections = (years, inflationRate, annualConsumption, unitCost, scenarios, currentAnnualSpend) => {
           const results = scenarios.map(scenario => {
             let overtakeYear = null;
             let finalCost = 0;
-            
-            // We simulate year by year (0 to 20) with fine granularity
             const dt = 0.05;
             
             for (let t = 0; t <= years; t += dt) {
@@ -40,7 +70,6 @@
               else if (scenario.type === 'max') gridFactor = 0.2;
               else if (scenario.type === 'single') gridFactor = 1 - (scenario.percent / 100);
               else if (scenario.type === 'phased') {
-                 // Determine active phase
                  let activePercent = 0;
                  if (scenario.phases) {
                      scenario.phases.forEach(p => {
@@ -53,13 +82,10 @@
               const yearlyCost = (annualConsumption * gridFactor) * (unitCost * Math.pow(1 + (inflationRate/100), t));
               finalCost = yearlyCost;
 
-              // Overtake Logic
               if (gridFactor < 1.0) {
-                // Ignore start noise
                 if (yearlyCost >= currentAnnualSpend && overtakeYear === null && t > 0.5) {
                   overtakeYear = t;
                 }
-                // Reset if it dips below again (Phased benefit)
                 if (yearlyCost < currentAnnualSpend && overtakeYear !== null) {
                   overtakeYear = null;
                 }
@@ -76,13 +102,7 @@
           return results;
         };
 
-        const SolarTreadmillGraph = ({ 
-          darkMode, 
-          inflationRate, 
-          annualConsumption, 
-          unitCost,
-          scenarios 
-        }) => {
+        const SolarTreadmillGraph = ({ darkMode, inflationRate, annualConsumption, unitCost, scenarios }) => {
           const canvasRef = useRef(null);
 
           useEffect(() => {
@@ -108,7 +128,6 @@
             const years = 20; 
             const currentAnnualSpend = annualConsumption * unitCost;
             
-            // Colors
             const colors = {
               bg: darkMode ? '#1F2937' : '#FFFFFF',
               text: darkMode ? '#E5E7EB' : '#374151',
@@ -116,22 +135,10 @@
               budgetLine: darkMode ? '#F87171' : '#DC2626',
             };
 
-            // Calculate Y-axis scaling
             const maxVal = currentAnnualSpend * 3.5; 
-            
-            const getY = (value) => {
-              return padding.top + chartHeight - (value / maxVal) * chartHeight;
-            };
-
-            const getX = (year) => {
-              return padding.left + (year / years) * chartWidth;
-            };
-
-            const formatCurrency = (val) => {
-              if (val >= 1000000) return `R ${(val/1000000).toFixed(1)}m`;
-              if (val >= 1000) return `R ${(val/1000).toFixed(0)}k`;
-              return `R ${val.toFixed(0)}`;
-            };
+            const getY = (value) => padding.top + chartHeight - (value / maxVal) * chartHeight;
+            const getX = (year) => padding.left + (year / years) * chartWidth;
+            const formatCurrency = (val) => val >= 1000000 ? `R ${(val/1000000).toFixed(1)}m` : val >= 1000 ? `R ${(val/1000).toFixed(0)}k` : `R ${val.toFixed(0)}`;
 
             // --- DRAWING ---
             ctx.clearRect(0, 0, width, height);
@@ -190,7 +197,6 @@
                  ctx.shadowBlur = 10;
               }
 
-              // Re-run the path logic for drawing
               const dt = 0.05;
               for (let t = 0; t <= years; t += dt) {
                 let gridFactor = 1.0;
@@ -254,13 +260,11 @@
               }
             });
 
-            // X-Axis
             ctx.textAlign = 'center';
             ctx.fillStyle = colors.text;
             ctx.font = '14px Inter, sans-serif';
             ctx.fillText('Years from Implementation', padding.left + chartWidth / 2, height - 15);
-
-            // Title
+            
             ctx.font = 'bold 18px Inter, sans-serif';
             ctx.textAlign = 'left';
             ctx.fillText('Projected Operational Costs', padding.left, 35);
@@ -276,6 +280,7 @@
 
         function App() {
           const [isDarkMode, setIsDarkMode] = useState(false);
+          const [isSpeaking, setIsSpeaking] = useState(false);
           
           // Inputs
           const [inflationRate, setInflationRate] = useState(9.8);
@@ -283,18 +288,33 @@
           const [unitCost, setUnitCost] = useState(5.43);
           const [capexPerKw, setCapexPerKw] = useState(28000); 
 
-          // Strategy Mode
           const [isPhasedMode, setIsPhasedMode] = useState(false);
-          
-          // Single Strategy State
           const [targetSolar, setTargetSolar] = useState(40);
-
-          // Phased Strategy State
           const [phase1, setPhase1] = useState({ percent: 30, year: 0 });
           const [phase2, setPhase2] = useState({ percent: 50, year: 3 });
           const [phase3, setPhase3] = useState({ percent: 80, year: 6 });
 
-          // --- ANALYSIS CALCULATION ---
+          // Voice Logic
+          useEffect(() => {
+            // Cleanup speech on unmount
+            return () => window.speechSynthesis.cancel();
+          }, []);
+
+          const toggleSpeech = () => {
+            if (isSpeaking) {
+                window.speechSynthesis.cancel();
+                setIsSpeaking(false);
+            } else {
+                const utterance = new SpeechSynthesisUtterance(TOUR_SCRIPT);
+                utterance.lang = 'en-US'; // Force language to ensure it works
+                utterance.rate = 1.0;
+                utterance.pitch = 1.0;
+                utterance.onend = () => setIsSpeaking(false);
+                window.speechSynthesis.speak(utterance);
+                setIsSpeaking(true);
+            }
+          };
+
           const analysisData = useMemo(() => {
             const currentAnnualSpend = annualConsumption * unitCost;
 
@@ -324,11 +344,8 @@
 
           }, [inflationRate, annualConsumption, unitCost, isPhasedMode, targetSolar, phase1, phase2, phase3]);
 
-
-          // Capex Calculations
           const specificYield = 1550; 
           const getCapexForPercent = (pct) => ((annualConsumption * (pct / 100)) / specificYield) * capexPerKw;
-
           const singleCapex = getCapexForPercent(targetSolar);
           const p1Capex = getCapexForPercent(phase1.percent);
           const p2Capex = getCapexForPercent(phase2.percent) - getCapexForPercent(phase1.percent);
@@ -337,17 +354,11 @@
 
           const fmtMoney = (val) => new Intl.NumberFormat('en-ZA', { style: 'currency', currency: 'ZAR', maximumFractionDigits: 0 }).format(val);
 
-          // Helper to determine risk status safely
           const getRiskStatus = (row) => {
-            if (row.label.includes('Do Nothing')) {
-                return { text: 'UNSUSTAINABLE', color: 'text-red-500 font-bold' };
-            }
-            if (!row.overtake || row.overtake === 0) {
-                return { text: 'Strategic Asset: Long-term stability.', color: 'text-green-500 font-bold' };
-            }
+            if (row.label.includes('Do Nothing')) return { text: 'UNSUSTAINABLE', color: 'text-red-500 font-bold' };
+            if (!row.overtake || row.overtake === 0) return { text: 'Strategic Asset: Long-term stability.', color: 'text-green-500 font-bold' };
             if (row.overtake < 5) return { text: 'Critical Risk: Short-term fix only.', color: 'text-orange-500' };
             if (row.overtake < 10) return { text: 'Moderate Risk: Buys medium-term time.', color: 'text-blue-500' };
-            
             return { text: 'Strategic Asset: Long-term stability.', color: 'text-green-500 font-bold' };
           };
 
@@ -363,16 +374,36 @@
                    </p>
                 </div>
                 
-                <button
-                  onClick={() => setIsDarkMode(!isDarkMode)}
-                  className={`px-4 py-2 rounded-lg font-medium text-sm transition-all ${
-                    isDarkMode 
-                      ? 'bg-gray-800 hover:bg-gray-700 text-white border border-gray-700' 
-                      : 'bg-white hover:bg-gray-100 text-gray-900 border border-gray-300 shadow-sm'
-                  }`}
-                >
-                  {isDarkMode ? '☀️ Light' : '🌙 Dark'}
-                </button>
+                <div className="flex items-center gap-3">
+                    <button
+                        onClick={toggleSpeech}
+                        className={`relative w-10 h-10 flex items-center justify-center rounded-full transition-all shadow-sm ${
+                            isSpeaking 
+                            ? 'bg-blue-500 text-white speaking-ring' 
+                            : isDarkMode ? 'bg-gray-800 text-gray-300 hover:bg-gray-700' : 'bg-white text-gray-600 hover:bg-gray-100 border border-gray-300'
+                        }`}
+                        title={isSpeaking ? "Stop Explanation" : "Listen to Explanation"}
+                    >
+                        {isSpeaking ? (
+                            // Stop Icon
+                             <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="4" y="4" width="16" height="16" rx="2" ry="2"></rect></svg>
+                        ) : (
+                            // Headphones Icon
+                            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 18v-6a9 9 0 0 1 18 0v6"></path><path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"></path></svg>
+                        )}
+                    </button>
+
+                    <button
+                      onClick={() => setIsDarkMode(!isDarkMode)}
+                      className={`px-4 py-2 rounded-lg font-medium text-sm transition-all ${
+                        isDarkMode 
+                          ? 'bg-gray-800 hover:bg-gray-700 text-white border border-gray-700' 
+                          : 'bg-white hover:bg-gray-100 text-gray-900 border border-gray-300 shadow-sm'
+                      }`}
+                    >
+                      {isDarkMode ? '☀️ Light' : '🌙 Dark'}
+                    </button>
+                </div>
               </div>
 
               <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
@@ -545,7 +576,7 @@
                         inflationRate={inflationRate}
                         annualConsumption={annualConsumption}
                         unitCost={unitCost}
-                        scenarios={analysisData} // Passing fully computed data
+                        scenarios={analysisData} 
                     />
                     </div>
 
@@ -583,7 +614,6 @@
                                 <tbody className="font-medium">
                                     {analysisData.map((row, i) => {
                                         const status = getRiskStatus(row);
-                                        // Skip drawing "Max" row in table if it's redundant/hidden
                                         if (row.hidden) return null;
 
                                         return (
