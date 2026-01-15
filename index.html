@@ -1,13 +1,62 @@
 import React, { useRef, useEffect, useState, useMemo } from 'react';
 
+// --- MATH HELPER (Pure Function) ---
+// This ensures the Graph and the Table use the exact same logic without needing to sync state
+const calculateProjections = (years, inflationRate, annualConsumption, unitCost, scenarios, currentAnnualSpend) => {
+  const results = scenarios.map(scenario => {
+    let overtakeYear = null;
+    let finalCost = 0;
+    
+    // We simulate year by year (0 to 20) with fine granularity
+    const dt = 0.05;
+    
+    for (let t = 0; t <= years; t += dt) {
+      let gridFactor = 1.0;
+      
+      if (scenario.type === 'grid') gridFactor = 1.0;
+      else if (scenario.type === 'max') gridFactor = 0.2;
+      else if (scenario.type === 'single') gridFactor = 1 - (scenario.percent / 100);
+      else if (scenario.type === 'phased') {
+         // Determine active phase
+         let activePercent = 0;
+         scenario.phases.forEach(p => {
+            if (t >= p.year) activePercent = p.percent;
+         });
+         gridFactor = 1 - (activePercent / 100);
+      }
+
+      const yearlyCost = (annualConsumption * gridFactor) * (unitCost * Math.pow(1 + (inflationRate/100), t));
+      finalCost = yearlyCost;
+
+      // Overtake Logic
+      if (gridFactor < 1.0) {
+        // Ignore start noise
+        if (yearlyCost >= currentAnnualSpend && overtakeYear === null && t > 0.5) {
+          overtakeYear = t;
+        }
+        // Reset if it dips below again (Phased benefit)
+        if (yearlyCost < currentAnnualSpend && overtakeYear !== null) {
+          overtakeYear = null;
+        }
+      }
+    }
+
+    return {
+      ...scenario,
+      overtake: scenario.type === 'grid' ? 0 : overtakeYear,
+      finalCost
+    };
+  });
+
+  return results;
+};
+
 const SolarTreadmillGraph = ({ 
   darkMode, 
   inflationRate, 
   annualConsumption, 
   unitCost,
-  customSolarPercent, // For single phase
-  phasedStrategy,     // For phased mode { active: bool, phases: [{percent, year}, ...] }
-  onUpdateAnalysis 
+  scenarios // Now receiving fully calculated scenarios
 }) => {
   const canvasRef = useRef(null);
 
@@ -17,8 +66,6 @@ const SolarTreadmillGraph = ({
 
     const dpr = window.devicePixelRatio || 1;
     const rect = canvas.getBoundingClientRect();
-    
-    // Guard against zero-sized canvas (e.g. hidden tab)
     if (rect.width === 0 || rect.height === 0) return;
 
     canvas.width = rect.width * dpr;
@@ -36,26 +83,6 @@ const SolarTreadmillGraph = ({
     const years = 20; 
     const currentAnnualSpend = annualConsumption * unitCost;
     
-    // Scenarios setup
-    const scenarios = [
-      { 
-        label: 'Do Nothing (100% Grid)', 
-        type: 'grid', 
-        color: '#EF4444' 
-      },
-      { 
-        label: phasedStrategy.active ? 'Phased Strategy' : `Proposed (${customSolarPercent}%)`, 
-        type: phasedStrategy.active ? 'phased' : 'single',
-        color: '#3B82F6', 
-        isCustom: true 
-      },
-      { 
-        label: 'Max Feasible (80%)', 
-        type: 'max', 
-        color: '#10B981' 
-      }
-    ];
-
     // Colors
     const colors = {
       bg: darkMode ? '#1F2937' : '#FFFFFF',
@@ -126,34 +153,10 @@ const SolarTreadmillGraph = ({
     ctx.textAlign = 'left';
     ctx.fillText('CURRENT BUDGET CEILING', width - padding.right + 10, budgetY + 4);
 
-    // Analysis Data Collection
-    const analysisResults = [];
-
-    // Helper to determine Grid Factor at time t
-    const getGridFactor = (scenario, t) => {
-        if (scenario.type === 'grid') return 1.0;
-        if (scenario.type === 'max') return 0.2;
-        if (scenario.type === 'single') return 1 - (customSolarPercent / 100);
-        
-        if (scenario.type === 'phased') {
-            // Find current active phase
-            let activePercent = 0;
-            // Phases assumed sorted by year, but let's check safety
-            if (phasedStrategy && phasedStrategy.phases) {
-                phasedStrategy.phases.forEach(p => {
-                    if (t >= p.year) activePercent = p.percent;
-                });
-            }
-            return 1 - (activePercent / 100);
-        }
-        return 1.0;
-    };
-
-    // Plotting
+    // Plot Scenarios
     scenarios.forEach((scenario) => {
-      // Avoid drawing Max line if Custom is very close to it to prevent clutter
-      if (scenario.type === 'max' && !phasedStrategy.active && customSolarPercent >= 75) return;
-      if (scenario.type === 'max' && phasedStrategy.active && phasedStrategy.phases[2].percent >= 75) return;
+      // Avoid drawing Max line if Custom is very close to it
+      if (scenario.type === 'max' && scenario.hidden) return;
 
       ctx.beginPath();
       ctx.strokeStyle = scenario.color;
@@ -163,62 +166,45 @@ const SolarTreadmillGraph = ({
          ctx.shadowBlur = 10;
       }
 
-      let overtakeYear = null;
-      let finalCost = 0;
-
-      // Draw curve
-      // We iterate with small steps to catch the "Drops" in phased mode
+      // Re-run the path logic for drawing (using same logic as projection function)
+      // We do this here for pixel-perfect line drawing
       const dt = 0.05;
       for (let t = 0; t <= years; t += dt) {
-        const gridFactor = getGridFactor(scenario, t);
-        const yearlyCost = (annualConsumption * gridFactor) * (unitCost * Math.pow(1 + (inflationRate/100), t));
-        finalCost = yearlyCost; // Track for label
-
+        let gridFactor = 1.0;
+        if (scenario.type === 'grid') gridFactor = 1.0;
+        else if (scenario.type === 'max') gridFactor = 0.2;
+        else if (scenario.type === 'single') gridFactor = 1 - (scenario.percent / 100);
+        else if (scenario.type === 'phased') {
+             let activePercent = 0;
+             scenario.phases.forEach(p => { if (t >= p.year) activePercent = p.percent; });
+             gridFactor = 1 - (activePercent / 100);
+        }
+        
+        const cost = (annualConsumption * gridFactor) * (unitCost * Math.pow(1 + (inflationRate/100), t));
         const x = getX(t);
-        const y = getY(yearlyCost);
+        const y = getY(cost);
 
         if (t === 0) ctx.moveTo(x, y);
         else ctx.lineTo(x, y);
-
-        // Overtake logic
-        if (gridFactor < 1.0) {
-            // We ignore overtakes in the first 0.5 years to avoid noise at start
-             if (yearlyCost >= currentAnnualSpend && overtakeYear === null && t > 0.5) {
-                overtakeYear = t;
-            }
-            // If it dips back BELOW budget (due to a new phase starting), reset overtake!
-            // This is key for the "Buying Time" narrative
-            if (yearlyCost < currentAnnualSpend && overtakeYear !== null) {
-                overtakeYear = null; 
-            }
-        }
       }
       ctx.stroke();
       ctx.shadowBlur = 0; 
-
-      // Store analysis
-      analysisResults.push({
-        label: scenario.label,
-        overtake: scenario.type === 'grid' ? 0 : overtakeYear,
-        color: scenario.color,
-        type: scenario.type
-      });
 
       // Label at end
       ctx.fillStyle = scenario.color;
       ctx.textAlign = 'left';
       ctx.font = scenario.isCustom ? 'bold 13px Inter, sans-serif' : '12px Inter, sans-serif';
       
-      const textY = Math.min(getY(finalCost), height - 10);
+      const textY = Math.min(getY(scenario.finalCost), height - 10);
       const topClamp = Math.max(textY, 20);
       
-      if (finalCost < maxVal * 1.5) { 
+      if (scenario.finalCost < maxVal * 1.5) { 
           ctx.fillText(scenario.label, width - padding.right + 5, topClamp);
       }
 
       // Annotate Overtake
-      if (overtakeYear) {
-        const x = getX(overtakeYear);
+      if (scenario.overtake) {
+        const x = getX(scenario.overtake);
         const y = budgetY;
 
         ctx.beginPath();
@@ -239,13 +225,9 @@ const SolarTreadmillGraph = ({
         ctx.fillStyle = colors.text;
         ctx.font = 'bold 12px Inter, sans-serif';
         const yOffset = scenario.isCustom ? 35 : 15;
-        ctx.fillText(`${overtakeYear.toFixed(1)} Yrs`, x, height - padding.bottom + yOffset);
+        ctx.fillText(`${scenario.overtake.toFixed(1)} Yrs`, x, height - padding.bottom + yOffset);
       }
     });
-
-    if (onUpdateAnalysis) {
-        onUpdateAnalysis(analysisResults);
-    }
 
     // X-Axis
     ctx.textAlign = 'center';
@@ -258,7 +240,7 @@ const SolarTreadmillGraph = ({
     ctx.textAlign = 'left';
     ctx.fillText('Projected Operational Costs', padding.left, 35);
 
-  }, [darkMode, inflationRate, annualConsumption, unitCost, customSolarPercent, phasedStrategy]);
+  }, [darkMode, inflationRate, annualConsumption, unitCost, scenarios]);
 
   return (
     <div style={{ width: '100%', height: '500px' }}>
@@ -287,25 +269,42 @@ export default function App() {
   const [phase2, setPhase2] = useState({ percent: 50, year: 3 });
   const [phase3, setPhase3] = useState({ percent: 80, year: 6 });
 
-  // Memoize the strategy object to prevent infinite useEffect loops in the child
-  const phasedStrategyMemo = useMemo(() => ({ 
-    active: isPhasedMode, 
-    phases: [phase1, phase2, phase3] 
-  }), [isPhasedMode, phase1, phase2, phase3]);
+  // --- ANALYSIS CALCULATION (Lifted to Parent) ---
+  const analysisData = useMemo(() => {
+    const currentAnnualSpend = annualConsumption * unitCost;
 
-  const [analysisData, setAnalysisData] = useState([]);
+    const rawScenarios = [
+      { 
+        label: 'Do Nothing (100% Grid)', 
+        type: 'grid', 
+        color: '#EF4444' 
+      },
+      { 
+        label: isPhasedMode ? 'Phased Strategy' : `Proposed (${targetSolar}%)`, 
+        type: isPhasedMode ? 'phased' : 'single',
+        color: '#3B82F6', 
+        isCustom: true,
+        percent: targetSolar,
+        phases: [phase1, phase2, phase3]
+      },
+      { 
+        label: 'Max Feasible (80%)', 
+        type: 'max', 
+        color: '#10B981',
+        hidden: !isPhasedMode && targetSolar >= 75 || isPhasedMode && phase3.percent >= 75 
+      }
+    ];
 
-  // Calculations
+    return calculateProjections(20, inflationRate, annualConsumption, unitCost, rawScenarios, currentAnnualSpend);
+
+  }, [inflationRate, annualConsumption, unitCost, isPhasedMode, targetSolar, phase1, phase2, phase3]);
+
+
+  // Capex Calculations
   const specificYield = 1550; 
-  
-  const getCapexForPercent = (pct) => {
-    return ((annualConsumption * (pct / 100)) / specificYield) * capexPerKw;
-  };
+  const getCapexForPercent = (pct) => ((annualConsumption * (pct / 100)) / specificYield) * capexPerKw;
 
-  // Single Calc
   const singleCapex = getCapexForPercent(targetSolar);
-
-  // Phased Calc (Incremental)
   const p1Capex = getCapexForPercent(phase1.percent);
   const p2Capex = getCapexForPercent(phase2.percent) - getCapexForPercent(phase1.percent);
   const p3Capex = getCapexForPercent(phase3.percent) - getCapexForPercent(phase2.percent);
@@ -521,13 +520,7 @@ export default function App() {
                 inflationRate={inflationRate}
                 annualConsumption={annualConsumption}
                 unitCost={unitCost}
-                customSolarPercent={targetSolar}
-                phasedStrategy={phasedStrategyMemo}
-                onUpdateAnalysis={(data) => {
-                    if(JSON.stringify(data) !== JSON.stringify(analysisData)) {
-                        setAnalysisData(data);
-                    }
-                }}
+                scenarios={analysisData} // Passing fully computed data
             />
             </div>
 
@@ -565,6 +558,9 @@ export default function App() {
                         <tbody className="font-medium">
                             {analysisData.map((row, i) => {
                                 const status = getRiskStatus(row);
+                                // Skip drawing "Max" row in table if it's redundant/hidden
+                                if (row.hidden) return null;
+
                                 return (
                                     <tr key={i} className={`border-b last:border-0 hover:bg-opacity-50 ${isDarkMode ? 'border-gray-700 hover:bg-gray-700' : 'border-gray-100 hover:bg-gray-50'}`}>
                                         <td className="p-3 flex items-center gap-2">
