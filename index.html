@@ -1,4 +1,4 @@
-import React, { useRef, useEffect, useState } from 'react';
+import React, { useRef, useEffect, useState, useMemo } from 'react';
 
 const SolarTreadmillGraph = ({ 
   darkMode, 
@@ -13,9 +13,14 @@ const SolarTreadmillGraph = ({
 
   useEffect(() => {
     const canvas = canvasRef.current;
+    if (!canvas) return;
+
     const dpr = window.devicePixelRatio || 1;
     const rect = canvas.getBoundingClientRect();
     
+    // Guard against zero-sized canvas (e.g. hidden tab)
+    if (rect.width === 0 || rect.height === 0) return;
+
     canvas.width = rect.width * dpr;
     canvas.height = rect.height * dpr;
     
@@ -134,7 +139,7 @@ const SolarTreadmillGraph = ({
             // Find current active phase
             let activePercent = 0;
             // Phases assumed sorted by year, but let's check safety
-            if (phasedStrategy.phases) {
+            if (phasedStrategy && phasedStrategy.phases) {
                 phasedStrategy.phases.forEach(p => {
                     if (t >= p.year) activePercent = p.percent;
                 });
@@ -281,6 +286,12 @@ export default function App() {
   const [phase1, setPhase1] = useState({ percent: 30, year: 0 });
   const [phase2, setPhase2] = useState({ percent: 50, year: 3 });
   const [phase3, setPhase3] = useState({ percent: 80, year: 6 });
+
+  // Memoize the strategy object to prevent infinite useEffect loops in the child
+  const phasedStrategyMemo = useMemo(() => ({ 
+    active: isPhasedMode, 
+    phases: [phase1, phase2, phase3] 
+  }), [isPhasedMode, phase1, phase2, phase3]);
 
   const [analysisData, setAnalysisData] = useState([]);
 
@@ -511,7 +522,7 @@ export default function App() {
                 annualConsumption={annualConsumption}
                 unitCost={unitCost}
                 customSolarPercent={targetSolar}
-                phasedStrategy={{ active: isPhasedMode, phases: [phase1, phase2, phase3] }}
+                phasedStrategy={phasedStrategyMemo}
                 onUpdateAnalysis={(data) => {
                     if(JSON.stringify(data) !== JSON.stringify(analysisData)) {
                         setAnalysisData(data);
